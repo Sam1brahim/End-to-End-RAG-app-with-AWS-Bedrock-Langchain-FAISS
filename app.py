@@ -11,7 +11,7 @@ from langchain_community.vectorstores import FAISS
 import time
 
 # loading Groq API key
-groq_api_key = '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'
+groq_api_key = ''
 
 if "vector" not in st.session_state:
     st.session_state.embeddings=OllamaEmbeddings()
