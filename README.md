@@ -1,1 +1,1 @@
-# nd-to-End-RAG-app-with-Sreamlit
+# End-to-End-RAG-app-with-Sreamlit
