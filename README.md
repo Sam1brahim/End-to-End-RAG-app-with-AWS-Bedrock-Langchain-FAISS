@@ -1,6 +1,8 @@
 # End-to-End-RAG-app-with-AWS Bedrock, Langchain & FAISS as a choice for a vector store.
 
 Steps to consider:
+
+
     * You need to create and set up your own AWS bedrock and IAM user with 'AdministratorAccess'
     * Go to models access, and select the model you want to access (Do not forget to request the access for the embeddings model of your choice too)
     * put inside the folder "Data" whatever documents you want to retrieve information from
