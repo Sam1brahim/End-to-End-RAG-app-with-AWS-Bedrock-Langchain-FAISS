@@ -1,5 +1,6 @@
 # End-to-End-RAG-app-with-AWS Bedrock, Langchain & FAISS as a choice for a vector store.
 
+In this example, I used my own personal CV.
 Steps to consider:
 
 
