@@ -1,57 +1,125 @@
-import streamlit as st
+import json
 import os
-from langchain_groq import ChatGroq
-from langchain_community.document_loaders import WebBaseLoader
-from langchain.embeddings import OllamaEmbeddings
+import sys
+import boto3
+import streamlit as st
+#--------------------------------------------------------------
+
+## Using the embeddings model to generate embeddings
+
+from langchain_community.embeddings import BedrockEmbeddings
+from langchain_community.llms import Bedrock
+#--------------------------------------------------------------
+
+## Data Ingestion (loading my docs)
+
+import numpy as np
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain_core.prompts import ChatPromptTemplate
-from langchain.chains import create_retrieval_chain
+#from langchain_community.document_loaders import PyPDFLoader
+from langchain_community.document_loaders.pdf import PyPDFDirectoryLoader
+def data_ingestion():
+    loader=PyPDFDirectoryLoader("data")
+    documents=loader.load()
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=1000) # to fit into the context window of my model
+    docs=text_splitter.split_documents(documents)
+    return docs
+#--------------------------------------------------------------
+## Conversion into Vector embeddings, and setting a remote Vector Store
 from langchain_community.vectorstores import FAISS
-import time
+def get_vector_store(docs):
+    vectorstore_faiss=FAISS.from_documents(
+        docs,
+        bedrock_embeddings
+    )
+    vectorstore_faiss.save_local("faiss_index")
 
-# loading Groq API key
-groq_api_key = ''
+def get_claude_llm():
+    ## getting Anthropic Model
+    llm= Bedrock(model_id="anthropic.claude-3-sonnet-20240229-v1:0",
+                 model_kwargs={"max_tokens":512}) # invoke the wrapper of langchain to connect to AWS bedrock
+    return llm
+def get_mixtral_llm():
+    ## getting Anthropic Model
+    llm= Bedrock(model_id="mistral.mixtral-8x7b-instruct-v0:1",
+                 model_kwargs={"max_tokens":512}) # invoke the wrapper of langchain to connect to AWS bedrock
+    return llm
+#--------------------------------------------------------------
 
-if "vector" not in st.session_state:
-    st.session_state.embeddings=OllamaEmbeddings()
-    st.session_state.loader=WebBaseLoader("https://docs.smith.langchain.com/")
-    st.session_state.docs=st.session_state.loader.load()
+## LLM models
+from langchain.prompts import PromptTemplate
+from langchain.chains import RetrievalQA
 
-    st.session_state.text_splitter=RecursiveCharacterTextSplitter(chunk_size=1000,chunk_overlap=200)
-    st.session_state.final_documents=st.session_state.text_splitter.split_documents(st.session_state.docs[:50])
-    st.session_state.vectors=FAISS.from_documents(st.session_state.final_documents,st.session_state.embeddings)
+prompt_template = """
 
-st.title("ChatGroq Demo")
-llm=ChatGroq(groq_api_key=groq_api_key,
-             model_name="mixtral-8x7b-32768")
-
-prompt=ChatPromptTemplate.from_template(
-"""
-Answer the questions based on the provided context only.
-Please provide the most accurate response based on the question
+Human: Use the following pieces of context to provide a 
+concise answer to the question at the end but atleast summarize with 
+250 words with detailed explantions. If you don't know the answer, 
+just say that you don't know, don't try to make up an answer.
 <context>
 {context}
-<context>
-Questions:{input}
+</context>
 
-"""
+Question: {question}
+
+Assistant:"""
+
+PROMPT = PromptTemplate(
+    template=prompt_template, input_variables=["context", "question"]
 )
-document_chain = create_stuff_documents_chain(llm, prompt)
-retriever = st.session_state.vectors.as_retriever()
-retrieval_chain = create_retrieval_chain(retriever, document_chain)
 
-prompt=st.text_input("Input you prompt here")
+def get_response_llm(llm,vectorstore_faiss,query):
+    qa = RetrievalQA.from_chain_type(
+            llm=llm,
+            chain_type="stuff",
+            retriever=vectorstore_faiss.as_retriever(
+                search_type="similarity",
+                search_kwargs={"k": 3}
+        ),
+        return_source_documents=True,
+        chain_type_kwargs={"prompt":PROMPT}
+    )
 
-if prompt:
-    start=time.process_time()
-    response=retrieval_chain.invoke({"input":prompt})
-    print("Response time :",time.process_time()-start)
-    st.write(response['answer'])
+    answer = qa({"query":query})
+    return answer['result']
+#--------------------------------------------------------------
+## Calling Bedrock Client
 
-    # With a streamlit expander
-    with st.expander("Document Similarity Search"):
-        # Find the relevant chunks
-        for i, doc in enumerate(response["context"]):
-            st.write(doc.page_content)
-            st.write("--------------------------------")
+bedrock = boto3.client(service_name='bedrock-runtime')
+bedrock_embeddings=BedrockEmbeddings(model_id="cohere.embed-english-v3",client=bedrock)
+
+
+def main():
+    st.set_page_config("Chat PDF")
+    
+    st.header("Chat with PDF using AWS Bedrock 🍕")
+
+    user_question = st.text_input("Ask a Question from the PDF Files")
+
+    with st.sidebar:
+        st.title("Update Or Create Vector Store:")
+        if st.button("Vectors Update"):
+            with st.spinner("Processing..."):
+                docs = data_ingestion()
+                get_vector_store(docs)
+                st.success("Done")
+
+    if st.button("Claude Output"):
+        with st.spinner("Processing..."):
+            faiss_index = FAISS.load_local("faiss_index", bedrock_embeddings,allow_dangerous_deserialization=True)
+            llm=get_claude_llm()
+            
+            #faiss_index = get_vector_store(docs)
+            st.write(get_response_llm(llm,faiss_index,user_question))
+            st.success("Done")
+
+    if st.button("Mixtral 8x7b Output"):
+        with st.spinner("Processing..."):
+            faiss_index = FAISS.load_local("faiss_index", bedrock_embeddings,allow_dangerous_deserialization=True)
+            llm=get_mixtral_llm()
+            
+            #faiss_index = get_vector_store(docs)
+            st.write(get_response_llm(llm,faiss_index,user_question))
+            st.success("Done")
+
+if __name__ == "__main__":
+    main()
